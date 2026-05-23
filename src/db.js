@@ -6,8 +6,8 @@ const db = new Pool({
 });
 
 async function initDB() {
+  // Add missing columns if they don't exist (safe migration)
   await db.query(`
-    -- Users table
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -18,8 +18,15 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW(),
       last_login TIMESTAMP
     );
+  `);
 
-    -- Plans table
+  // Safe column additions for existing tables
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(255);`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';`);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS plans (
       id SERIAL PRIMARY KEY,
       name VARCHAR(50) UNIQUE NOT NULL,
@@ -32,7 +39,6 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW()
     );
 
-    -- Licenses table
     CREATE TABLE IF NOT EXISTS licenses (
       id SERIAL PRIMARY KEY,
       key VARCHAR(64) UNIQUE NOT NULL,
@@ -47,7 +53,6 @@ async function initDB() {
       auto_expire BOOLEAN DEFAULT true
     );
 
-    -- Activations table
     CREATE TABLE IF NOT EXISTS activations (
       id SERIAL PRIMARY KEY,
       license_key VARCHAR(64) NOT NULL,
@@ -57,14 +62,12 @@ async function initDB() {
       UNIQUE(license_key, device_id)
     );
 
-    -- Settings table
     CREATE TABLE IF NOT EXISTS settings (
       key VARCHAR(100) PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TIMESTAMP DEFAULT NOW()
     );
 
-    -- Contact messages
     CREATE TABLE IF NOT EXISTS contacts (
       id SERIAL PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -73,27 +76,34 @@ async function initDB() {
       status VARCHAR(20) DEFAULT 'unread',
       created_at TIMESTAMP DEFAULT NOW()
     );
+  `);
 
-    -- Insert default settings
-    INSERT INTO settings(key,value) VALUES('groq_api_key','') ON CONFLICT(key) DO NOTHING;
-    INSERT INTO settings(key,value) VALUES('groq_model','llama-3.1-8b-instant') ON CONFLICT(key) DO NOTHING;
-    INSERT INTO settings(key,value) VALUES('site_name','QaimAssist AI') ON CONFLICT(key) DO NOTHING;
-    INSERT INTO settings(key,value) VALUES('whatsapp_number','+923001234567') ON CONFLICT(key) DO NOTHING;
+  // Default settings
+  await db.query(`INSERT INTO settings(key,value) VALUES('groq_api_key','') ON CONFLICT(key) DO NOTHING;`);
+  await db.query(`INSERT INTO settings(key,value) VALUES('groq_model','llama-3.1-8b-instant') ON CONFLICT(key) DO NOTHING;`);
+  await db.query(`INSERT INTO settings(key,value) VALUES('site_name','QaimAssist AI') ON CONFLICT(key) DO NOTHING;`);
+  await db.query(`INSERT INTO settings(key,value) VALUES('whatsapp_number','+923001234567') ON CONFLICT(key) DO NOTHING;`);
 
-    -- Insert default plans
+  // Default plans
+  await db.query(`
     INSERT INTO plans(name,label,price_usd,price_pkr,duration_days,features) VALUES
       ('trial','Free Trial',0,0,7,'["All AI features","1 device","7 days access"]'),
       ('monthly','Monthly Plan',9,2500,30,'["All AI features","2 devices","30 days access","Email support"]'),
       ('yearly','Yearly Plan',69,19000,365,'["All AI features","2 devices","365 days access","Priority support","Save 36%"]'),
       ('lifetime','Lifetime Plan',149,41000,NULL,'["All AI features","2 devices","Lifetime access","Priority support","All future updates"]')
     ON CONFLICT(name) DO NOTHING;
-
-    -- Insert default superadmin
-    INSERT INTO users(name,email,password_hash,role,status) VALUES
-      ('Super Admin','admin@qaimassist.com','$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi','superadmin','active')
-    ON CONFLICT(email) DO NOTHING;
   `);
-  console.log('✅ Database initialized');
+
+  // Default superadmin (password: admin123)
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash('admin123', 10);
+  await db.query(`
+    INSERT INTO users(name,email,password_hash,role,status)
+    VALUES('Super Admin','admin@qaimassist.com',$1,'superadmin','active')
+    ON CONFLICT(email) DO UPDATE SET role='superadmin', name='Super Admin';
+  `, [hash]);
+
+  console.log('✅ Database initialized successfully');
 }
 
 module.exports = { db, initDB };
