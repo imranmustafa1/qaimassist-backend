@@ -5,6 +5,7 @@ const db = new Pool({
 });
 
 async function initDB() {
+  // Create all tables
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -30,9 +31,9 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS licenses (
       id SERIAL PRIMARY KEY,
       key VARCHAR(64) UNIQUE NOT NULL,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER,
       email VARCHAR(255),
-      plan_name VARCHAR(50) NOT NULL DEFAULT 'trial',
+      plan VARCHAR(50) NOT NULL DEFAULT 'trial',
       status VARCHAR(20) DEFAULT 'active',
       devices_used INTEGER DEFAULT 0,
       max_devices INTEGER DEFAULT 2,
@@ -63,24 +64,35 @@ async function initDB() {
     );
   `);
 
-  // Safe migrations
+  // Safe column migrations
   const migrations = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP",
-    "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS plan_name VARCHAR(50) DEFAULT 'trial'",
     "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS email VARCHAR(255)",
-    "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS auto_expire BOOLEAN DEFAULT true",
     "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS user_id INTEGER",
+    "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS auto_expire BOOLEAN DEFAULT true",
+    "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS plan VARCHAR(50) DEFAULT 'trial'",
   ];
   for (const sql of migrations) {
-    await db.query(sql).catch(() => {});
+    await db.query(sql).catch(e => console.log('Migration note:', e.message));
   }
 
-  // Fix null emails in licenses
-  await db.query(`UPDATE licenses l SET email=u.email FROM users u WHERE l.user_id=u.id AND l.email IS NULL`).catch(() => {});
-  await db.query(`UPDATE licenses SET plan_name='monthly' WHERE plan_name IS NULL OR plan_name=''`).catch(() => {});
+  // If plan_name column exists, copy to plan and keep plan as canonical
+  await db.query(`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='licenses' AND column_name='plan_name') THEN
+        UPDATE licenses SET plan = plan_name WHERE plan IS NULL AND plan_name IS NOT NULL;
+      END IF;
+    END $$;
+  `).catch(()=>{});
+
+  // Fix any null plans
+  await db.query(`UPDATE licenses SET plan='monthly' WHERE plan IS NULL OR plan=''`).catch(()=>{});
+
+  // Fix null emails in licenses from users table
+  await db.query(`UPDATE licenses l SET email=u.email FROM users u WHERE l.user_id=u.id AND (l.email IS NULL OR l.email='')`).catch(()=>{});
 
   // Default settings
   for (const [k, v] of [
@@ -96,9 +108,9 @@ async function initDB() {
   await db.query(`
     INSERT INTO plans(name,label,price_usd,price_pkr,duration_days,features) VALUES
       ('trial','Free Trial',0,0,7,'["All AI features","1 device","7 days access","Basic support"]'),
-      ('monthly','Monthly Plan',9,2500,30,'["All AI features","2 devices","30 days access","Email support","Grammar fix","AI Reply"]'),
-      ('yearly','Yearly Plan',69,19000,365,'["All AI features","2 devices","365 days access","Priority support","Save 36%","All features"]'),
-      ('lifetime','Lifetime Plan',149,41000,NULL,'["All AI features","2 devices","Lifetime access","Priority support","All future updates","Unlimited usage"]')
+      ('monthly','Monthly Plan',9,2500,30,'["All AI features","2 devices","30 days access","Email support"]'),
+      ('yearly','Yearly Plan',69,19000,365,'["All AI features","2 devices","365 days access","Priority support","Save 36%"]'),
+      ('lifetime','Lifetime Plan',149,41000,NULL,'["All AI features","2 devices","Lifetime access","Priority support","All future updates"]')
     ON CONFLICT(name) DO NOTHING;
   `);
 
@@ -110,9 +122,9 @@ async function initDB() {
   if (!existing.rows.length) {
     await db.query("INSERT INTO users(name,email,password_hash,role,status) VALUES('Super Admin','admin@qaimassist.com',$1,'superadmin','active')", [hash]);
   } else {
-    await db.query("UPDATE users SET password_hash=$1,role='superadmin',status='active',name='Super Admin' WHERE email='admin@qaimassist.com'", [hash]);
+    await db.query("UPDATE users SET password_hash=$1, role='superadmin', status='active', name='Super Admin' WHERE email='admin@qaimassist.com'", [hash]);
   }
-  console.log(`✅ DB ready | Admin: admin@qaimassist.com / ${adminPass}`);
+  console.log(`✅ DB ready | admin@qaimassist.com / ${adminPass}`);
 }
 
 module.exports = { db, initDB };
