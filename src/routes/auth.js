@@ -7,7 +7,7 @@ const { authMiddleware, JWT_SECRET } = require('../middleware/auth');
 router.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'All fields required' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password min 6 characters' });
   try {
     const exists = await db.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase().trim()]);
     if (exists.rows.length) return res.status(400).json({ error: 'Email already registered' });
@@ -34,37 +34,17 @@ router.post('/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
     await db.query('UPDATE users SET last_login=NOW() WHERE id=$1', [user.id]);
-
-    // Get licenses — safe query without plan_id
     let licenses = [];
     try {
       const lics = await db.query(
-        `SELECT l.*, p.label as plan_label, p.features
-         FROM licenses l
-         LEFT JOIN plans p ON l.plan_name = p.name
-         WHERE l.user_id = $1
-         ORDER BY l.created_at DESC`,
+        `SELECT l.*, p.label as plan_label, p.features FROM licenses l LEFT JOIN plans p ON l.plan=p.name WHERE l.user_id=$1 ORDER BY l.created_at DESC`,
         [user.id]
       );
       licenses = lics.rows;
-    } catch(e) {
-      console.log('License query error:', e.message);
-    }
-
-    const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-    res.json({
-      success: true, token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
-      licenses
-    });
-  } catch(e) {
-    console.error('Login error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
+    } catch(e) { console.log('License query:', e.message); }
+    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ success: true, token, user: { id: user.id, name: user.name, email: user.email, role: user.role }, licenses });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 router.get('/me', authMiddleware, async (req, res) => {
@@ -72,27 +52,21 @@ router.get('/me', authMiddleware, async (req, res) => {
     let licenses = [];
     try {
       const lics = await db.query(
-        `SELECT l.*, p.label as plan_label, p.features
-         FROM licenses l LEFT JOIN plans p ON l.plan_name = p.name
-         WHERE l.user_id = $1 ORDER BY l.created_at DESC`,
+        `SELECT l.*, p.label as plan_label, p.features FROM licenses l LEFT JOIN plans p ON l.plan=p.name WHERE l.user_id=$1 ORDER BY l.created_at DESC`,
         [req.user.id]
       );
       licenses = lics.rows;
-    } catch(e) { console.log('me license error:', e.message); }
-    res.json({
-      success: true,
-      user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role },
-      licenses
-    });
+    } catch(e) {}
+    res.json({ success: true, user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role }, licenses });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 router.post('/change-password', authMiddleware, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both fields required' });
   try {
     const valid = await bcrypt.compare(currentPassword, req.user.password_hash);
-    if (!valid) return res.status(400).json({ error: 'Current password is incorrect' });
+    if (!valid) return res.status(400).json({ error: 'Current password incorrect' });
     const hash = await bcrypt.hash(newPassword, 10);
     await db.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, req.user.id]);
     res.json({ success: true });
